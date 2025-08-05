@@ -1,0 +1,135 @@
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.10;
+
+// 引入OpenZeppelin的ERC20接口和安全库
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/utils/Address.sol";
+import "@openzeppelin/contracts/utils/math/Math.sol";
+
+// 引入OpenZeppelin的可升级合约相关库
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+
+contract RCCStake is
+    Initializable,
+    UUPSUpgradeable,
+    AccessControlUpgradeable,
+    PausableUpgradeable
+{
+    using SafeERC20 for IERC20;
+    using Address for address;
+    using SafeMath for uint256;
+
+    // ************************************** 常量与权限 **************************************
+
+    // 定义合约管理员角色
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+    // 定义合约升级员角色
+    bytes32 public constant UPGRADER_ROLE = keccak256("UPGRADER_ROLE");
+    // 原生币池的池ID（第一个池）
+    uint256 public constant nativeCurrency_PID = 0;
+
+    // ************************************** 数据结构 **************************************
+
+    /*
+    任何时刻，用户应得但尚未分发的RCC数量为：
+    pending RCC = (user.stAmount * pool.accRCCPerST) - user.finishedRCC
+
+    用户每次存入或取出质押时，流程如下：
+    1. 更新池子的accRCCPerST和lastRewardBlock
+    2. 发放用户待领取的RCC
+    3. 更新用户的stAmount
+    4. 更新用户的finishedRCC
+    */
+
+    /**
+     * @dev 质押池结构体
+     */
+    struct Pool {
+        address stTokenAddress;      // 质押代币地址（原生币为0x0）
+        uint256 poolWeight;          // 池子权重（决定奖励分配比例）
+        uint256 lastRewardBlock;     // 上次分配奖励的区块号
+        uint256 accRCCPerST;         // 累计每个质押代币分到的RCC（扩大1e18精度）
+        uint256 stTokenAmount;       // 当前池子总质押量
+        uint256 minDepositAmount;    // 最小质押数量
+        uint256 unstakeLockedBlocks; // 解押后需要等待的区块数
+    }
+
+    /**
+     * @dev 解押请求结构体
+     */
+    struct UnstakeRequest {
+        // 质押数量
+        uint256 amount;
+        // 可提现的区块号
+        uint256 unlockBlocks;
+    }
+
+    /**
+     * @dev 用户结构体
+     */
+
+    struct User {
+        // 用户质押的代币数量
+        uint256 stamount;
+        // 用户已领取的RCC数量
+        uint256 finshedRCC;
+        // 用户未领取的RCC数量
+        uint256 pendingRCC;
+        // 用户的解押请求队列
+        UnstakeRequest[] requests;
+
+
+    }
+    // 挖矿开始的区块号
+    uint256 public startBlock;
+    // 挖矿结束的区块号
+    uint256 public endBlock;
+    // 每个区块的RCC奖励数量
+    uint256 public RCCPerBlock;
+
+    // 是否暂停体现
+    bool public withdrawPaused;
+    // 是否暂停领取奖励
+    bool public claimPaused;
+
+    // RCC代币合约地址
+    IERC20 public RCC;
+
+    // 质押池列表
+    Pool[] public pool;
+
+    // 用户信息映射：池ID => 用户地址 => 用户信息
+    mapping(uint256 => mapping(address => User)) public user;
+
+    // ************************************** 事件 **************************************
+
+    // ************************************** 修饰符 **************************************
+    // 合约中的修饰符（Modifier）用于在函数执行前 / 后自动执行特定逻辑（如权限检查、参数验证、状态限制等）
+
+    // 检查池ID是否有效
+    modifier checkPid(uint256 _pid) {
+        require(_pid < pool.length, "invalid pid");
+        _;
+    }
+
+    // 检查 “领取奖励” 功能是否未被暂停（即claimPaused为false）
+    modifier whenNotClaimPaused() {
+        require(!claimPaused, "claim is paused");
+        _;
+    }
+
+    // 检查 “提现” 功能是否未被暂停（即withdrawPaused为false）
+    modifier whenNotWithdrawPaused() {
+        require(!withdrawPaused, "withdraw is paused");
+        _;
+    }
+
+
+
+
+
+}
