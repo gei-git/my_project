@@ -128,7 +128,49 @@ contract RCCStake is
         _;
     }
 
+    // ************************************** 初始化函数 **************************************
 
+    /**
+     * @notice 初始化合约，设置RCC地址、起止区块、每区块奖励
+     */
+    // initializer修饰符：来自Initializable库，确保该函数只能被调用一次
+    function initialize(
+        IERC20 _RCC,
+        uint256 _startBlock,
+        uint256 _endBlock,
+        uint256 _RCCPerBlock
+    ) public initializer {
+        // 挖矿开始区块（_startBlock）不能晚于结束区块（_endBlock），否则挖矿周期无效
+        // 每区块奖励（_RCCPerBlock）必须大于 0，否则无奖励可分配，合约失去意义。
+        require(_startBlock <= _endBlock && _RCCPerBlock > 0, "invalid parameters");
+        // 合约继承了AccessControlUpgradeable（权限管理）、UUPSUpgradeable（可升级逻辑）、PausableUpgradeable（暂停功能）三个父合约。
+        // 调用父合约的__xxx_init()函数，初始化它们的内部状态（如权限角色的基础设置、可升级标记、暂停状态变量等），确保父合约功能正常可用。
+
+        // 初始化AccessControlUpgradeable父合约
+        __AccessControl_init();
+        // 初始化UUPSUpgradeable父合约
+        __UUPSUpgradeable_init();
+        // 初始化PausableUpgradeable父合约
+        __Pausable_init();
+        // 授予默认管理员角色
+        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        // 授予合约升级角色
+        _grantRole(UPGRADE_ROLE, msg.sender);
+        // 授予日常管理员角色
+        _grantRole(ADMIN_ROLE, msg.sender);
+
+
+        // 调用合约内部的setRCC函数（管理员函数），将_RCC参数设置为当前合约使用的奖励代币地址。
+        // 后续用户领取的奖励、合约计算的收益，都基于该 RCC 代币。
+        setRCC(_RCC);
+
+        // 记录挖矿开始区块
+        startBlock = _startBlock;
+        // 记录挖矿结束区块
+        endBlock = _endBlock;
+        // 记录每区块的RCC奖励数量
+        RCCPerBlock = _RCCPerBlock;
+    }
 
 
 
