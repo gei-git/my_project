@@ -106,7 +106,14 @@ contract RCCStake is
     mapping(uint256 => mapping(address => User)) public user;
 
     // ************************************** 事件 **************************************
-
+    /**
+        * @dev 当RCC地址被设置时触发
+        * @param _RCC 新的RCC代币合约地址
+        功能：记录 RCC 代币地址的设置或更新。
+        触发时机：当管理员通过setRCC函数设置或修改 RCC 代币合约地址时触发。
+        作用：让外部系统知晓当前合约使用的 RCC 代币地址，确保奖励发放和查询的准确性。
+        */
+    event SetRCC(IERC20 indexed _RCC);
     // ************************************** 修饰符 **************************************
     // 合约中的修饰符（Modifier）用于在函数执行前 / 后自动执行特定逻辑（如权限检查、参数验证、状态限制等）
 
@@ -171,7 +178,33 @@ contract RCCStake is
         // 记录每区块的RCC奖励数量
         RCCPerBlock = _RCCPerBlock;
     }
+    // UUPS升级函数
+    /**
+        * @dev 重写UUPSUpgradeable的授权升级函数
+        * @param newImplementation 新的实现合约地址
+        * @notice _authorizeUpgrade 是 UUPSUpgradeable 父合约中定义的抽象函数，
+            必须在子合约中重写实现，否则合约无法编译。
+        * @notice onlyRole(UPGRADER_ROLE):来自 AccessControlUpgradeable 库。
+            它要求调用者（即触发升级的地址）必须拥有 UPGRADER_ROLE 角色，否则会拒绝升级操作
+        * @notice override 关键字表示该函数是对父合约中 抽象函数的重写
+        * @notice 函数体为空（{}），因为它的核心作用是权限检查，而非处理业务逻辑。
+            权限检查由 onlyRole 修饰符完成，只要通过修饰符的验证，函数就会成功执行，允许升级继续
+        */
 
+    function _authorizeUpgrade(address newImplementation)
+        internal override
+        onlyRole(UPGRADER_ROLE)
+    {}
+
+    // ************************************** 管理员函数 **************************************
+    /**
+     * @notice 设置RCC代币地址
+     * @param _RCC 新的RCC代币合约地址
+     */
+    function setRCC(IERC20 _RCC) public onlyRole(ADMIN_ROLE)  {
+        RCC = _RCC;
+        emit SetRCC(_RCC);
+    }
 
 
 }
