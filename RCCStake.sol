@@ -99,6 +99,8 @@ contract RCCStake is
     // RCC代币合约地址
     IERC20 public RCC;
 
+    // 总权重（所有池子的权重之和）
+    uint256 public totalPoolWeight;
     // 质押池列表
     Pool[] public pool;
 
@@ -114,6 +116,39 @@ contract RCCStake is
         作用：让外部系统知晓当前合约使用的 RCC 代币地址，确保奖励发放和查询的准确性。
         */
     event SetRCC(IERC20 indexed _RCC);
+    // 暂停提现功能时触发
+    event pausedWithdraw();
+    // 恢复提现功能时触发
+    event UnpausedWithdraw();
+    // 暂停领取奖励功能时触发
+    event pauseClaim();
+    // 恢复领取奖励功能时触发
+    event UnpauseClaim();
+    // 设置挖矿开始区块时触发
+    event SetStartBlock(uint256 indexed _startBlock);
+    // 设置挖矿结束区块时触发
+    event SetEndBlock(uint256 indexed _endBlock);
+    // 添加新质押池时触发
+    event AddPool(
+        address indexed _stTokenAddress,
+        uint256 indexed _poolWeight,
+        uint256 indexed _lastRewardBlock,
+        uint256 _minDepositAmount,
+        uint256 _unstakeLockedBlocks
+    );
+    // 更新质押池信息时触发
+    event UpdataPoolInfo(
+        uint256 indexed _pid,
+        uint256 _minDepositAmount,
+        uint256 _unstakeLockedBlocks
+    );
+    // 设置质押池权重时触发
+    event SetPoolWeight(
+        uint256 indexed _pid,
+        uint256 indexed _poolWeight,
+        bool _withUpdate
+    );
+
     // ************************************** 修饰符 **************************************
     // 合约中的修饰符（Modifier）用于在函数执行前 / 后自动执行特定逻辑（如权限检查、参数验证、状态限制等）
 
@@ -206,5 +241,172 @@ contract RCCStake is
         emit SetRCC(_RCC);
     }
 
+    /**
+     * @notice 暂停提现功能
+     * 这段代码是 RCCStake 合约中用于暂停提现功能的管理员函数，属于合约安全机制的一部分，
+       用于在紧急情况下（如发现异常交易、合约漏洞等）临时冻结用户的提现操作，保护用户资产安全
+     *
+     */
+    function pauseWithdraw() public onlyRole(ADMIN_ROLE) {
+        require(withdrawPaused,"withdraw is paused");
+        withdrawPaused = true;
+        emit pausedWithdraw();
+    }
 
+    /**
+     * @notice 恢复提现功能
+     * 这段代码是 RCCStake 合约中用于恢复提现功能的管理员函数，属于合约安全机制的一部分，
+       用于在紧急情况解除后，重新开放用户的提现操作，确保用户能够正常提取其质押的资产
+     *
+     */
+    function unpauseWithdraw() public onlyRole(ADMIN_ROLE) {
+        require(!withdrawPaused,"withdraw is not paused");
+        withdrawPaused = false;
+        emit UnpausedWithdraw();
+    }
+
+    /**
+     * @notice 暂停领取奖励功能
+     * 这段代码是 RCCStake 合约中用于暂停领取奖励功能的管理员函数，属于合约安全机制的一部分，
+       用于在紧急情况下（如发现异常交易、合约漏洞等）临时冻结用户的奖励领取操作，保护用户资产安全
+     */
+    function pauseClaim() public onlyRole(ADMIN_ROLE) {
+        require(!claimPaused, "claim is paused");
+        claimPaused = true;
+        emit pauseClaim();
+    }
+
+    /**
+     * @notice 恢复领取奖励功能
+     * 这段代码是 RCCStake 合约中用于恢复领取奖励功能的管理员函数，属于合约安全机制的一部分，
+       用于在紧急情况解除后，重新开放用户的奖励领取操作，确保用户能够正常提取其质押的奖励
+     */
+    function UnpauseClaim() public onlyRole(ADMIN_ROLE) {
+        require(claimPaused, "claim is not paused");
+        claimPaused = false;
+        emit UnpauseClaim();
+
+    }
+
+    /**
+     * @notice 设置挖矿开始区块
+     * @param _startBlock 新的挖矿开始区块号
+     * @dev 只能由管理员调用，且新的开始区块不能晚于结束区块
+     */
+    function setStartBlock(uint256 _startBlock) public onlyRole(ADMIN_ROLE) {
+        require(_startBlock <= endBlock, "invalid start block");
+        startBlock = _startBlock;
+        emit SetStartBlock(_startBlock);
+    }
+
+    /**
+     * @notice 设置挖矿结束区块
+     * @param _endBlock 新的挖矿结束区块号
+     * @dev 只能由管理员调用，且新的结束区块不能早于开始区块
+     */
+    function setEndBlock(uint256 _endBlock) public onlyRole(ADMIN_ROLE) {
+        require(_endBlock >= startBlock, "invalid end block");
+        endBlock = _endBlock;
+        emit SetEndBlock(_endBlock);
+    }
+
+    /**
+     * @notice 设置每区块的RCC奖励数量
+     * @param _RCCPerBlock 新的每区块RCC奖励数量
+     * @dev 只能由管理员调用，且奖励数量必须大于0
+     */
+    function setRCCPerBlock(uint256 _RCCPerBlock) public onlyRole(ADMIN_ROLE) {
+        require(_RCCPerBlock > 0, "RCCPerBlock must be greater than 0");
+        RCCPerBlock = _RCCPerBlock;
+    }
+
+    /**
+     * @notice 添加新的质押池
+     * @param _stTokenAddress 质押代币地址（原生币为0x0）
+     * @param _poolWeight 池子权重（决定奖励分配比例）
+     * @param _minDepositAmount 最小质押数量
+     * @param _unstakeLockedBlocks 解押后需要等待的区块数
+     * @param _withUpdate 是否更新所有池的状态
+     */
+    function addPool(
+        address _stTokenAddress,
+        uint256 _poolWeight,
+        uint256 _minDepositAmount,
+        uint256 _unstakeLockedBlocks,
+        bool _withUpdate
+    ) public onlyRole(ADMIN_ROLE) {
+        // 如果pool.length > 0就代表已经有代币池了
+        if(pool.length > 0) {
+            // 那么新添加的池子必须有质押代币地址，不能是原生币池
+            // 在 Solidity 中，address(0x0) 是一个特殊地址，通常用来表示 “原生币”
+            // address(0x0) 是 Solidity 中对 “20 字节全零地址” 的标准表示
+            require(_stTokenAddress != address(0x0), "invalid staking token address");
+        } else {
+            // 如果是第一个池子（原生币池），质押代币地址必须是0x0
+            require(_stTokenAddress == address(0x0), "invalid staking token address");
+        }
+
+        // _unstakeLockedBlocks 是新增池子的 “解押后锁定区块数”
+        //（用户发起解押后，需要等待该数量的区块才能提现）
+        require(_unstakeLockedBlocks > 0, "invalid withdraw locked blocks");
+        //要求当前区块号必须小于挖矿结束区块号,确保只能在挖矿周期内新增质押池。
+        require(block.number < endBlock, "Already ended");
+
+        if(_withUpdate) {
+            // 如果需要更新所有池的状态，调用massUpdatePools();函数
+            massUpdatePools();
+        }
+
+        // 新池的初始 “奖励结算基准区块”，后续奖励将从该区块开始计算
+        // 若 block.number > startBlock：当前区块已超过挖矿开始区块（即挖矿已启动），则新池的初始结算区块设为 block.number
+        // 若 block.number <= startBlock：当前区块未到挖矿开始时间（即挖矿尚未启动），则新池的初始结算区块设为 startBlock
+        uint256 lastRewardBlock = block.number > startBlock ? block.number : startBlock;
+        // 将新建池子的权重加入到权重总和中
+        totalPoolWeight = totalPoolWeight + _poolWeight;
+
+        // 将新池子添加到池子列表中
+        pool.push(
+            Pool({
+                stTokenAddress: _stTokenAddress,
+                poolWeight: _poolWeight,
+                lastRewardBlock: lastRewardBlock,
+                accRCCPerST: 0,
+                stTokenAmount: 0,
+                minDepositAmount: _minDepositAmount,
+                unstakeLockedBlocks: _unstakeLockedBlocks
+            })
+        );
+
+        emit AddPool(_stTokenAddress, _poolWeight,lastRewardBlock, _minDepositAmount, _unstakeLockedBlocks);
+    }
+
+    /**
+     * @notice 更新质押池的参数
+     * @param _pid 池ID
+     * @param _minDepositAmount 最小质押数量
+     * @param _unstakeLockedBlocks 解押后需要等待的区块数
+     */
+    function updataPool(uint256 _pid, uint256 _minDepositAmount, uint256 _unstakeLockedBlocks) public onlyRole(ADMIN_ROLE) checkPid(_pid) {
+        // 更新指定池子的最小质押数量和解押锁定区块数
+        pool[_pid].minDepositAmount = _minDepositAmount;
+        pool[_pid].unstakeLockedBlocks = _unstakeLockedBlocks;
+
+        emit UpdataPoolInfo(_pid, _minDepositAmount, _unstakeLockedBlocks);
+    }
+
+
+    function setPoolWeight(uint256 _pid, uint256 _poolWeight, bool _withUpdate) public onlyRole(ADMIN_ROLE) checkPid(_pid) {
+        require(_poolWeight > 0, "invalid pool weight");
+        // 如果需要更新所有池的状态，调用massUpdatePools();函数
+        if(_withUpdate) {
+            massUpdatePools();
+        }
+
+        // 更新总权重：先减去旧的池子权重，再加上新的池子权重
+        totalPoolWeight = totalPoolWeight - pool[_pid].poolWeight + _poolWeight;
+        pool[_pid].poolWeight = _poolWeight;
+
+        emit SetPoolWeight(_pid, _poolWeight, _withUpdate);
+
+    }
 }
