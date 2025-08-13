@@ -394,7 +394,13 @@ contract RCCStake is
         emit UpdataPoolInfo(_pid, _minDepositAmount, _unstakeLockedBlocks);
     }
 
-
+    /**
+     * @notice 设置质押池的权重
+     * @param _pid 池ID
+     * @param _poolWeight 新的池子权重
+     * @param _withUpdate 是否更新所有池的状态
+     * @dev 只能由管理员调用，且新的权重必须大于0
+     */
     function setPoolWeight(uint256 _pid, uint256 _poolWeight, bool _withUpdate) public onlyRole(ADMIN_ROLE) checkPid(_pid) {
         require(_poolWeight > 0, "invalid pool weight");
         // 如果需要更新所有池的状态，调用massUpdatePools();函数
