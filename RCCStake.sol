@@ -409,4 +409,6 @@ contract RCCStake is
         emit SetPoolWeight(_pid, _poolWeight, _withUpdate);
 
     }
+
+    // ************************************** 查询函数 **************************************
 }
