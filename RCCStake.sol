@@ -148,6 +148,12 @@ contract RCCStake is
         uint256 indexed _poolWeight,
         bool _withUpdate
     );
+    // 更新质押池状态时触发
+    event UpdatePool(
+        uint256 indexed _pid,
+        uint256 indexed _lastRewardBlock,
+        uint256 indexed _totalRCC
+    );
 
     // ************************************** 修饰符 **************************************
     // 合约中的修饰符（Modifier）用于在函数执行前 / 后自动执行特定逻辑（如权限检查、参数验证、状态限制等）
@@ -417,4 +423,125 @@ contract RCCStake is
     }
 
     // ************************************** 查询函数 **************************************
+
+    /**
+     * @notice 获得质押池的数量
+     */
+    function poolLength() public view returns (uint256) {
+        // 返回当前质押池的数量
+        return pool.length;
+    }
+
+    /**
+     * @notice 获取区块奖励倍数
+     * @param _from 起始区块（包含）
+     * @param _to   结束区块（不包含）
+     */
+    function getMultiplier(uint256 _from, uint256 _to) public view returns (uint256 multiplier) {
+        require(_from <= _to, "invalid block range");
+        // 小于startBlock和大于endBlock的区块范围无效
+        // 修正起始区块（与挖矿开始区块对齐）
+        if (_from < startBlock) {
+            _from = startBlock;
+        }
+        // 修正结束区块（与挖矿结束区块对齐）
+        if (_to > endBlock) {
+            _to = endBlock;
+        }
+        // 修正后范围二次校验
+        require(_from <= _to, "end block must be greater than start block");
+
+        // 从结束区块减去起始区块，再用每区块奖励数量（RCCPerBlock）乘以区块数，计算出奖励倍数
+        // 使用 tryMul（OpenZeppelin Math 库的安全乘法函数）执行乘法
+        bool success;
+        (success, multiplier) = (_to - _from).tryMul(RCCPerBlock);
+        require(success, "multiplier overflow");
+    }
+    /**
+    * @notice 查询用户在某池的待领取RCC奖励
+     */
+    function pendingRCC(uint256 _pid, address _user) external checkPid(_pid) view returns(uint256) {
+        return pendingRCCByBlockNumber(_pid, _user, block.number);
+    }
+
+    /**
+     * @notice 查询用户在某池指定区块的待领取RCC奖励
+     */
+    function pendingRCCByBlockNumber(uint256 _pid, address _user, uint256 _blockNumber) public checkPid(_pid) view returns(uint256) {
+        Pool storage pool_ = pool[_pid];
+        User storage user_ = user[_pid][_user];
+        uint256 accRCCPerST = pool_.accRCCPerST;
+        uint256 stSupply = pool_.stTokenAmount;
+
+        // 如果有新奖励未结算，先模拟结算
+        if (_blockNumber > pool_.lastRewardBlock && stSupply != 0) {
+            uint256 multiplier = getMultiplier(pool_.lastRewardBlock, _blockNumber);
+            uint256 RCCForPool = multiplier * pool_.poolWeight / totalPoolWeight;
+            accRCCPerST = accRCCPerST + RCCForPool * (1 ether) / stSupply;
+        }
+
+        // 计算用户应得奖励
+        return user_.stAmount * accRCCPerST / (1 ether) - user_.finishedRCC + user_.pendingRCC;
+    }
+
+    /**
+     * @notice 查询用户在某池的质押数量
+     */
+    function stakingBalance(uint256 _pid, address _user) external checkPid(_pid) view returns(uint256) {
+        return user[_pid][_user].stAmount;
+    }
+
+    /**
+     * @notice 查询用户的解押请求和可提现数量
+     */
+    function withdrawAmount(uint256 _pid, address _user) public checkPid(_pid) view returns(uint256 requestAmount, uint256 pendingWithdrawAmount) {
+        User storage user_ = user[_pid][_user];
+        for (uint256 i = 0; i < user_.requests.length; i++) {
+            if (user_.requests[i].unlockBlocks <= block.number) {
+                pendingWithdrawAmount = pendingWithdrawAmount + user_.requests[i].amount;
+            }
+            requestAmount = requestAmount + user_.requests[i].amount;
+        }
+    }
+
+    // ************************************** 公开函数 **************************************
+
+    function UpdatePool(uint256 _pid) public checkPid(_pid) {
+        Pool storage pool_ = pool[_pid];
+        // 如果当前区块号小于上次奖励结算区块，说明没有新奖励需要结算
+        if (block.number <= pool_.lastRewardBlock) {
+            return;
+        }
+
+        // 步骤1：计算从上次结算到当前区块的总奖励（multiplier）× 池权重（poolWeight）
+        (bool success1, uint256 totalRCC) = getMultiplier(pool_.lastRewardBlock, block.number).tryMul(pool_.poolWeight);
+        require(success1, "totalRCC mul poolWeight overflow");
+
+        // 步骤2：再除以总权重（totalPoolWeight），得到该池实际应得的奖励
+        (success1, totalRCC) = totalRCC.tryDiv(totalPoolWeight);
+        require(success1, "totalRCC div totalPoolWeight overflow");
+
+        uint256 stSupply = pool_.stTokenAmount;  // 池的总质押量
+        if(stSupply){
+            uint256 stSupply = pool_.stTokenAmount;  // 池的总质押量
+            if (stSupply > 0) {  // 只有当池中有质押资产时，才分配奖励（没人质押则无需分配）
+                // 步骤1：将总奖励（totalRCC）放大1e18倍（处理精度，避免小数误差）
+                (bool success2, uint256 totalRCC_) = totalRCC.tryMul(1 ether);
+                require(success2, "totalRCC mul 1 ether overflow");
+
+                // 步骤2：除以总质押量（stSupply），得到“每单位质押资产应得的奖励”（带精度）
+                (success2, totalRCC_) = totalRCC_.tryDiv(stSupply);
+                require(success2, "totalRCC div stSupply overflow");
+
+                // 步骤3：累加到池的“累计每单位奖励”（accRCCPerST）中
+                (bool success3, uint256 accRCCPerST) = pool_.accRCCPerST.tryAdd(totalRCC_);
+                require(success3, "pool accRCCPerST overflow");
+                pool_.accRCCPerST = accRCCPerST;  // 更新累计奖励精度
+            }
+            pool_.lastRewardBlock = block.number;  // 更新最后奖励结算区块为当前区块
+
+            emit UpdatePool(_pid, pool_.lastRewardBlock, totalRCC);
+        }
+
+    }
 }
