@@ -543,5 +543,6 @@ contract RCCStake is
             emit UpdatePool(_pid, pool_.lastRewardBlock, totalRCC);
         }
 
+
     }
 }
